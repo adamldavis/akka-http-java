@@ -18,6 +18,14 @@ import java.util.stream.Stream;
 
 public class WebApp extends AllDirectives {
 
+    final ActorSystem system;
+    final ChatServer chatServer;
+
+    public WebApp(ActorSystem system) {
+        this.system = system;
+        this.chatServer = new ChatServer(system);
+    }
+
     public static void main(String[] args) {
         // boot up server using the route as defined below
         var system = ActorSystem.create("routes");
@@ -26,7 +34,7 @@ public class WebApp extends AllDirectives {
         final ActorMaterializer materializer = ActorMaterializer.create(system);
 
         //In order to access all directives we need an instance where the routes are defined.
-        var app = new WebApp();
+        var app = new WebApp(system);
 
         final Flow<HttpRequest, HttpResponse, NotUsed> routeFlow = app.joinedRoutes()
                 .flow(system, materializer);
@@ -44,12 +52,15 @@ public class WebApp extends AllDirectives {
     }
 
     private Route createHelloRoute() {
+        final Source<String,NotUsed> file = Source.single("/akkahttp/index.html");
         return route(
                 path("hello", () ->
-                        get(() ->
-                                complete(HttpEntities.create(ContentTypes.TEXT_HTML_UTF8,
-                                        "<h1>Say hello to akka-http</h1>"))
-                        )));
+                    get(() ->
+                        complete(HttpEntities.create(ContentTypes.TEXT_HTML_UTF8,
+                            file.map(f -> WebApp.class.getResourceAsStream(f))
+                                .map(stream -> stream.readAllBytes())
+                                .map(bytes -> ByteString.fromArray(bytes))))
+                    )));
     }
 
     /**
@@ -59,21 +70,23 @@ public class WebApp extends AllDirectives {
         final Random rnd = new Random();
         // streams are re-usable so we can define it here
         // and use it for every request
-        Source<Integer, NotUsed> numbers = Source.fromIterator(() -> Stream.generate(rnd::nextInt).iterator());
+        Source<Integer, NotUsed> numbers =
+                Source.fromIterator(() -> Stream.generate(rnd::nextInt).iterator());
 
         return route(
                 path("random", () ->
-                        get(() ->
-                                complete(HttpEntities.create(ContentTypes.TEXT_PLAIN_UTF8,
-                                        // transform each number to a chunk of bytes
-                                        numbers.map(x -> ByteString.fromString(x + "\n"))))
-                        )));
+                    get(() ->
+                        complete(HttpEntities.create(ContentTypes.TEXT_PLAIN_UTF8,
+                                // transform each number to a chunk of bytes
+                                numbers.map(x -> ByteString.fromString(x + "\n"))))
+                    )));
     }
 
     public Route createWebsocketRoute() {
-        return path("greeter", () ->
-                handleWebSocketMessages(WebSocketExample.greeter())
+        return path("chat/ws", () ->
+                handleWebSocketMessages(chatServer.flow())
         );
+        // was handleWebSocketMessages(WebSocketExample.greeter())
     }
 
     private Route joinedRoutes() {

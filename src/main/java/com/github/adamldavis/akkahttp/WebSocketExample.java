@@ -69,21 +69,17 @@ public class WebSocketExample {
      */
     public static Flow<Message, Message, NotUsed> greeter() {
         return Flow.<Message>create()
-                .buffer(1, OverflowStrategy.dropHead())
-                .collect(new JavaPartialFunction<Message, Message>() {
-                    @Override
-                    public Message apply(Message msg, boolean isCheck) {
-                        if (isCheck) {
-                            if (msg.isText()) {
-                                return null;
-                            } else {
-                                throw noMatch();
-                            }
-                        } else {
-                            return handleTextMessage(msg.asTextMessage());
-                        }
+            .collect(new JavaPartialFunction<>() {
+                @Override
+                public Message apply(Message msg, boolean isCheck) {
+                    if (isCheck) {
+                        if (msg.isText()) return null;
+                        else throw noMatch();
+                    } else {
+                        return handleTextMessage(msg.asTextMessage());
                     }
-                });
+                }
+            });
     }
 
     public static TextMessage handleTextMessage(TextMessage msg) {
