@@ -4,10 +4,9 @@
 <head>
     <title>Hello Akka HTTP!</title>
     <script>
-        var webSocket = new WebSocket("ws://localhost:5005/chat/ws");
+        var webSocket = new WebSocket("ws://localhost:5010/chatws");
         function submitChat() {
             var msg = { // Construct a msg object:
-                type: "message",
                 username: document.getElementById("u").value,
                 message: document.getElementById("m").value
             };
@@ -19,8 +18,7 @@
         webSocket.onmessage = function (event) {
             console.log(event.data);
             var content = document.getElementById("content");
-            content.innerHTML.concat('<br>');
-            content.innerHTML.concat(event.data);
+            content.innerHTML = content.innerHTML + '<br>' + event.data;
         }
     </script>
 </head>

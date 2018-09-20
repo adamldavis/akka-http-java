@@ -5,8 +5,13 @@ import akka.actor.ActorSystem;
 import akka.http.javadsl.ConnectHttp;
 import akka.http.javadsl.Http;
 import akka.http.javadsl.ServerBinding;
-import akka.http.javadsl.model.*;
-import akka.http.javadsl.server.*;
+import akka.http.javadsl.model.ContentTypes;
+import akka.http.javadsl.model.HttpEntities;
+import akka.http.javadsl.model.HttpRequest;
+import akka.http.javadsl.model.HttpResponse;
+import akka.http.javadsl.server.AllDirectives;
+import akka.http.javadsl.server.Route;
+import akka.http.javadsl.settings.ServerSettings;
 import akka.stream.ActorMaterializer;
 import akka.stream.javadsl.Flow;
 import akka.stream.javadsl.Source;
@@ -39,9 +44,10 @@ public class WebApp extends AllDirectives {
         final Flow<HttpRequest, HttpResponse, NotUsed> routeFlow = app.joinedRoutes()
                 .flow(system, materializer);
         final CompletionStage<ServerBinding> binding = http.bindAndHandle(routeFlow,
-                ConnectHttp.toHost("localhost", 5005), materializer);
+                ConnectHttp.toHost("localhost", 5010), getSettings(system),
+                system.log(), materializer);
 
-        System.out.println("Server online at http://localhost:5005/\nUse Ctrl+C to stop...");
+        System.out.println("Server online at http://localhost:5010/\nUse Ctrl+C to stop...");
 
         // add shutdown Hook to terminate system:
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
@@ -49,6 +55,15 @@ public class WebApp extends AllDirectives {
             binding.thenCompose(ServerBinding::unbind) // trigger unbinding from the port
                     .thenAccept(unbound -> system.terminate()); // and shutdown when done
         }));
+    }
+
+    private static ServerSettings getSettings(ActorSystem system) {
+        ServerSettings defaultSettings = ServerSettings.create(system);
+        var webSocketSettings = defaultSettings.getWebsocketSettings();
+        System.out.println("mode=" + webSocketSettings.periodicKeepAliveMode());
+        System.out.println("max-idle=" + webSocketSettings.periodicKeepAliveMaxIdle());
+
+        return defaultSettings.withWebsocketSettings(webSocketSettings);
     }
 
     private Route createHelloRoute() {
@@ -83,7 +98,7 @@ public class WebApp extends AllDirectives {
     }
 
     public Route createWebsocketRoute() {
-        return path("chat/ws", () ->
+        return path("chatws", () ->
                 handleWebSocketMessages(chatServer.flow())
         );
         // was handleWebSocketMessages(WebSocketExample.greeter())

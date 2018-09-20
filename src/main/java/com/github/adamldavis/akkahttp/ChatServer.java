@@ -1,6 +1,5 @@
 package com.github.adamldavis.akkahttp;
 
-import akka.Done;
 import akka.NotUsed;
 import akka.actor.ActorSystem;
 import akka.http.javadsl.model.ws.Message;
@@ -8,8 +7,8 @@ import akka.http.javadsl.model.ws.TextMessage;
 import akka.japi.JavaPartialFunction;
 import akka.stream.*;
 import akka.stream.javadsl.*;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.reactivestreams.Publisher;
-import org.reactivestreams.Subscriber;
 
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -21,9 +20,14 @@ public class ChatServer {
     private final MessageRepository messageRepository = new MessageRepository();
     private final ActorMaterializer materializer;
 
-    private final Source<ChatMessage, NotUsed> source;
+    // reactivestreams.org API used for dynamic topologies
     private final Sink<ChatMessage, NotUsed> sink;
     private final Publisher<ChatMessage> publisher;
+    // MergeHub and BroadcastHub can be used as well:
+    final RunnableGraph<Sink<ChatMessage, NotUsed>> mergeHub;
+    private final Sink<ChatMessage, NotUsed> mergeSink;
+    final ObjectMapper jsonMapper = new ObjectMapper();
+
     private final int parallelism;
 
     public ChatServer(ActorSystem actorSystem) {
@@ -32,10 +36,10 @@ public class ChatServer {
         materializer = ActorMaterializer.create(actorSystem);
         var asPublisher = Sink.<ChatMessage>asPublisher(AsPublisher.WITH_FANOUT);
         var publisherSinkPair = asPublisher.preMaterialize(materializer);
-
         publisher = publisherSinkPair.first();
         sink = publisherSinkPair.second();
-        source = Source.fromPublisher(publisher);
+        mergeHub = MergeHub.of(ChatMessage.class, BUFFER_SIZE).to(sink);
+        mergeSink = mergeHub.run(materializer); // must run to get the sink
     }
 
     public Publisher<ChatMessage> getPublisher() {
@@ -43,8 +47,7 @@ public class ChatServer {
     }
 
     private Flow<String, ChatMessage, NotUsed> parseContent() {
-        return Flow.of(String.class).map(line -> line.split("\\|"))
-                .map(fields -> new ChatMessage(fields[0], fields[1]));
+        return Flow.of(String.class).map(line -> jsonMapper.readValue(line, ChatMessage.class));
     }
 
     private Sink<ChatMessage, CompletionStage<ChatMessage>> storeChatMessages() {
@@ -77,39 +80,40 @@ public class ChatServer {
                 .collect(new JavaPartialFunction<Message, CompletionStage<ChatMessage>>() {
                     @Override
                     public CompletionStage<ChatMessage> apply(Message msg, boolean isCheck) {
-                        if (isCheck) {
-                            if (msg.isText()) return null;
-                            else throw noMatch();
-                        } else {
+                        if (msg.isText()) {
+                            if (isCheck) return null;
+
                             TextMessage textMessage = msg.asTextMessage();
                             if (textMessage.isStrict()) {
                                 return storeMessageFromContent(
                                         CompletableFuture.completedFuture(textMessage.getStrictText()));
-
                             } else {
                                 return storeMessageFromContent(textMessage.getStreamedText()
                                         .runFold("", (each, total) -> total + each, materializer));
                             }
-                        }
+                        } else if (isCheck) throw noMatch();
+                        return CompletableFuture.completedStage(new ChatMessage(null, null));
                     }
-                }).mapAsync(parallelism, stage -> stage); // unwraps the CompletionStage
+                })
+                .mapAsync(parallelism, stage -> stage) // unwraps the CompletionStage
+                .filter(m -> m.username != null);
 
         final Graph<FlowShape<Message, Message>, NotUsed> graph =
                 GraphDSL.create(builder -> {
                     final FlowShape<ChatMessage, Message> toMessage =
-                            builder.add(Flow.of(ChatMessage.class).map(ChatMessage::toString).async()
+                            builder.add(Flow.of(ChatMessage.class)
+                                    .map(jsonMapper::writeValueAsString).async()
                                     .map(TextMessage::create));
 
-                    final UniformFanInShape<Message, Message> merge = builder.add(Merge.create(1));
-
-                    Inlet<ChatMessage> sinkInlet = builder.add(sink).in();
-                    Outlet<ChatMessage> sourceOutlet = builder.add(source).out();
+                    Inlet<ChatMessage> sinkInlet = builder.add(mergeSink).in();
+                    Outlet<ChatMessage> publisherOutput = builder.add(Source.fromPublisher(publisher)).out();
                     FlowShape<Message, ChatMessage> saveFlow = builder.add(savingFlow);
 
-                    builder.from(saveFlow.out()).toInlet(sinkInlet); // connect saveFlow to global sink
-                    builder.from(sourceOutlet).via(toMessage).toInlet(merge.in(0)); // convert source and send to M
+                    // copy saveFlow to both sinkInlet and Merge that goes to output
+                    builder.from(saveFlow.out()).toInlet(sinkInlet);
+                    builder.from(publisherOutput).toInlet(toMessage.in()); // from source send to converter
 
-                    return new FlowShape<>(saveFlow.in(), merge.out()); // define FlowShape
+                    return new FlowShape<>(saveFlow.in(), toMessage.out()); // define FlowShape
                 });
         return Flow.fromGraph(graph);
     }

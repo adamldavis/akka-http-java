@@ -24,6 +24,7 @@ dependencies {
 	compile "com.typesafe.akka:akka-http_2.12:$akkaHttpVersion"
     compile "com.typesafe.akka:akka-http-jackson_2.12:$akkaHttpVersion"
 	compile "com.typesafe.akka:akka-stream_2.12:$akkaVersion"
+    compile group: 'com.typesafe.akka', name: 'akka-http-jackson_2.12', version: akkaHttpVersion
 
     testCompile "com.typesafe.akka:akka-http-testkit_2.12:$akkaHttpVersion"
     testCompile "com.typesafe.akka:akka-stream-testkit_2.12:$akkaVersion"
